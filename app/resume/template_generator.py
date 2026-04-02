@@ -1,6 +1,7 @@
 import os
 import tempfile
 import logging
+from datetime import datetime
 from docxtpl import DocxTemplate
 from app.resume.schemas import StructuredResume
 from app.config import get_settings
@@ -47,8 +48,8 @@ def _prepare_context(resume_data: StructuredResume) -> dict:
         "website": contact.website or "",
         "notice_period": contact.notice_period or "",
         "candidate_type": contact.candidate_type or "External",
-        "interview_availability": contact.interview_availability or "",
-        "start_availability": contact.start_availability or "",
+        "interview_availability": _format_ddmmyyyy(contact.interview_availability),
+        "start_availability": _format_ddmmyyyy(contact.start_availability),
         "total_experience_years": contact.total_experience_years or "0",
         "relevant_experience_years": contact.relevant_experience_years or "0",
         "hacker_rank_score": contact.hacker_rank_score or "",
@@ -62,8 +63,8 @@ def _prepare_context(resume_data: StructuredResume) -> dict:
                 "company": exp.company,
                 "position": exp.position,
                 "client_name": exp.client_name or exp.company,
-                "start_date": exp.start_date,
-                "end_date": exp.end_date or "Present",
+                "start_date": _format_ddmmyyyy(exp.start_date),
+                "end_date": _format_ddmmyyyy(exp.end_date) or "Present",
                 "description": exp.description,
                 "responsibilites": exp.description,
                 "technologies": exp.technologies or [],
@@ -75,18 +76,38 @@ def _prepare_context(resume_data: StructuredResume) -> dict:
                 "institution": edu.institution,
                 "degree": edu.degree,
                 "field_of_study": edu.field_of_study,
-                "graduation_date": edu.graduation_date,
+                "graduation_date": _format_ddmmyyyy(edu.graduation_date),
                 "gpa": edu.gpa or "",
             }
             for edu in resume_data.education
         ],
         "skills": [{"category": s.category, "skills": s.skills} for s in resume_data.skills],
         "certifications": [
-            {"name": c.name, "issuer": c.issuer, "date": c.date}
+            {"name": c.name, "issuer": c.issuer, "date": _format_ddmmyyyy(c.date)}
             for c in resume_data.certifications
         ],
     }
     return context
+
+
+def _format_ddmmyyyy(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d-%m-%Y")
+    raw = str(value).strip()
+    if not raw:
+        return ""
+
+    if "T" in raw:
+        raw = raw.split("T", 1)[0]
+
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return str(value)
 
 
 def list_templates() -> list[dict]:

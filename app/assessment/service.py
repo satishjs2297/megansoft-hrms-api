@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from sqlalchemy.orm import Session
 from app.database import AssessmentRecord
 from app.assessment.schemas import AssessmentCreate
@@ -20,13 +21,40 @@ def create_assessment(db: Session, data: AssessmentCreate) -> AssessmentRecord:
     return _deserialize(record)
 
 
-def get_all_assessments(db: Session, search: str = "") -> list:
+def get_all_assessments(
+    db: Session,
+    search: str = "",
+    panel_name: str = "",
+    feedback_status: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> list:
     query = db.query(AssessmentRecord).order_by(AssessmentRecord.created_at.desc())
     results = query.all()
     records = [_deserialize(r) for r in results]
+
     if search:
         q = search.lower()
         records = [r for r in records if q in r["candidate_name"].lower() or q in r["panel_name"].lower()]
+
+    if panel_name:
+        panel_query = panel_name.lower()
+        records = [r for r in records if panel_query in r["panel_name"].lower()]
+
+    if feedback_status:
+        status_query = feedback_status.lower()
+        records = [r for r in records if r["assessment_status"].lower() == status_query]
+
+    if date_from:
+        from_date = _safe_parse_date(date_from)
+        if from_date:
+            records = [r for r in records if _record_date_in_range(r["date_of_interview"], from_date, None)]
+
+    if date_to:
+        to_date = _safe_parse_date(date_to)
+        if to_date:
+            records = [r for r in records if _record_date_in_range(r["date_of_interview"], None, to_date)]
+
     return records
 
 
@@ -59,3 +87,29 @@ def _deserialize(record: AssessmentRecord) -> dict:
         "created_at": record.created_at,
     }
     return d
+
+
+def _safe_parse_date(value: str):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if "T" in raw:
+        raw = raw.split("T", 1)[0]
+
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _record_date_in_range(raw_date: str, from_date=None, to_date=None) -> bool:
+    parsed = _safe_parse_date(raw_date)
+    if not parsed:
+        return False
+    if from_date and parsed < from_date:
+        return False
+    if to_date and parsed > to_date:
+        return False
+    return True

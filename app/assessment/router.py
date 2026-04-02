@@ -46,17 +46,50 @@ def create_assessment(
 @router.get("")
 def list_assessments(
     search: str = "",
+    panelName: str = "",
+    feedbackStatus: str = "",
+    fromDate: str = "",
+    toDate: str = "",
+    pageNo: int = 1,
+    maxRecords: int = 10,
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    records = service.get_all_assessments(db, search)
+    pageNo = max(pageNo, 1)
+    maxRecords = max(maxRecords, 1)
+
+    records = service.get_all_assessments(
+        db,
+        search=search,
+        panel_name=panelName,
+        feedback_status=feedbackStatus,
+        date_from=fromDate,
+        date_to=toDate,
+    )
     total = len(records)
     selected = sum(1 for r in records if "Select" in r["assessment_status"])
     rejected = sum(1 for r in records if "Reject" in r["assessment_status"])
     on_hold = sum(1 for r in records if r["assessment_status"] == "On Hold")
+    status_counts: Dict[str, int] = {}
+    for r in records:
+        key = r["assessment_status"]
+        status_counts[key] = status_counts.get(key, 0) + 1
+
+    total_pages = (total + maxRecords - 1) // maxRecords if total > 0 else 1
+    start = (pageNo - 1) * maxRecords
+    end = start + maxRecords
+    paged_records = records[start:end]
+
     return {
-        "records": records,
-        "summary": {"total": total, "selected": selected, "rejected": rejected, "on_hold": on_hold}
+        "records": paged_records,
+        "summary": {"total": total, "selected": selected, "rejected": rejected, "on_hold": on_hold},
+        "status_counts": status_counts,
+        "pagination": {
+            "pageNo": pageNo,
+            "maxRecords": maxRecords,
+            "totalRecords": total,
+            "totalPages": total_pages,
+        }
     }
 
 

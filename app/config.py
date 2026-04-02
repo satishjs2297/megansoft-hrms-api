@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 480
 
     llm_provider: str = "azure-openai"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-4.1"
+    llm_max_completion_tokens: int = 4000
+    llm_slow_log_threshold_seconds: float = 8.0
     openai_api_key: str = ""
     azure_openai_key: str = ""
     azure_openai_endpoint: str = ""

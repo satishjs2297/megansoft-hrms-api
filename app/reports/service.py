@@ -49,7 +49,7 @@ def record_to_pdf(record: dict) -> bytes:
     col_w = page_width / 4
     meta_data = [
         ["Candidate Name", record["candidate_name"], "Panel / Interviewer", record["panel_name"]],
-        ["Date of Interview", record["date_of_interview"], "Assessment Status", record["assessment_status"]],
+        ["Date of Interview", _format_ddmmyyyy(record.get("date_of_interview")), "Assessment Status", record["assessment_status"]],
     ]
     meta_table = Table(meta_data, colWidths=[col_w*1.1, col_w*1.4, col_w*1.1, col_w*1.4])
     meta_table.setStyle(TableStyle([
@@ -137,10 +137,33 @@ def records_to_csv(records: list) -> str:
     for r in records:
         row = {
             "id": r["id"], "candidate_name": r["candidate_name"], "panel_name": r["panel_name"],
-            "date_of_interview": r["date_of_interview"], "assessment_status": r["assessment_status"],
-            "overall_observation": r.get("overall_observation", ""), "created_at": str(r.get("created_at", "")),
+            "date_of_interview": _format_ddmmyyyy(r.get("date_of_interview")), "assessment_status": r["assessment_status"],
+            "overall_observation": r.get("overall_observation", ""), "created_at": _format_ddmmyyyy(r.get("created_at")),
         }
         for skill in all_skills:
             row[f"skill_{skill}"] = r.get("skills_assessment", {}).get(skill, "")
         writer.writerow(row)
     return output.getvalue()
+
+
+def _format_ddmmyyyy(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d-%m-%Y")
+
+    raw = str(value).strip()
+    if not raw:
+        return ""
+
+    if "T" in raw:
+        raw = raw.split("T", 1)[0]
+    elif " " in raw:
+        raw = raw.split(" ", 1)[0]
+
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return str(value)

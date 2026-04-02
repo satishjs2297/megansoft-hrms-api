@@ -24,7 +24,7 @@ def export_assessment_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
     safe_name = record["candidate_name"].replace(" ", "_")
-    filename = f"assessment_{safe_name}_{record['date_of_interview']}.pdf"
+    filename = f"assessment_{safe_name}_{_safe_date_part(record.get('date_of_interview'))}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f"attachment; filename={filename}"})
 
@@ -52,6 +52,21 @@ def export_single_csv(
         raise HTTPException(status_code=404, detail="Assessment not found")
     csv_content = records_to_csv([record])
     safe_name = record["candidate_name"].replace(" ", "_")
-    filename = f"assessment_{safe_name}_{record['date_of_interview']}.csv"
+    filename = f"assessment_{safe_name}_{_safe_date_part(record.get('date_of_interview'))}.csv"
     return Response(content=csv_content, media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+def _safe_date_part(value) -> str:
+    if not value:
+        return datetime.now().strftime("%d-%m-%Y")
+    raw = str(value).strip()
+    if "T" in raw:
+        raw = raw.split("T", 1)[0]
+    if " " in raw:
+        raw = raw.split(" ", 1)[0]
+    raw = raw.replace("/", "-")
+    parts = raw.split("-")
+    if len(parts) == 3 and len(parts[0]) == 4:
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    return raw
