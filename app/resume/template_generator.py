@@ -176,27 +176,24 @@ def _resolve_relevant_skill_names(resume_data: StructuredResume) -> list[str]:
 
 
 def _resolve_relevant_skill_groups(resume_data: StructuredResume, relevant_skill_names: list[str]) -> list[dict]:
-    normalized_targets = [s.strip().lower() for s in relevant_skill_names if s.strip()]
-    groups: list[dict] = []
-    for group in resume_data.skills:
-        matched: list[str] = []
-        for skill in group.skills:
-            skill_text = (skill or "").strip()
-            if not skill_text:
-                continue
-            skill_l = skill_text.lower()
+    if not relevant_skill_names:
+        return []
+    resolved: list[dict] = []
+    for name in _dedupe_keep_order(relevant_skill_names):
+        skill_l = name.lower()
+        category = "Relevant Skills"
+        for group in resume_data.skills:
             if any(
-                target == skill_l or target in skill_l or skill_l in target
-                for target in normalized_targets
+                skill_l == (s or "").strip().lower()
+                or skill_l in (s or "").strip().lower()
+                or (s or "").strip().lower() in skill_l
+                for s in group.skills
             ):
-                matched.append(skill_text)
-        if matched:
-            groups.append({"category": group.category, "skills": _dedupe_keep_order(matched)})
-    if groups:
-        return groups
-    if relevant_skill_names:
-        return [{"category": "Relevant Skills", "skills": _dedupe_keep_order(relevant_skill_names)}]
-    return []
+                category = group.category
+                break
+        # Keep one row per top skill so templates can render exactly top-3.
+        resolved.append({"category": category, "skills": [name]})
+    return resolved[:3]
 
 
 def _dedupe_keep_order(values: list[str]) -> list[str]:
