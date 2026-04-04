@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from pathlib import Path
 
 class Settings(BaseSettings):
     secret_key: str = "changeme-secret"
@@ -27,6 +28,24 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+
+    @property
+    def project_root(self) -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    @property
+    def resolved_templates_dir(self) -> str:
+        path = Path(self.templates_dir)
+        if not path.is_absolute():
+            path = self.project_root / path
+        return str(path)
+
+    @property
+    def resolved_output_dir(self) -> str:
+        path = Path(self.output_dir)
+        if not path.is_absolute():
+            path = self.project_root / path
+        return str(path)
 
 @lru_cache
 def get_settings() -> Settings:

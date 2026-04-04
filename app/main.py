@@ -14,8 +14,8 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_tables()
-    os.makedirs(settings.output_dir, exist_ok=True)
-    os.makedirs(settings.templates_dir, exist_ok=True)
+    os.makedirs(settings.resolved_output_dir, exist_ok=True)
+    os.makedirs(settings.resolved_templates_dir, exist_ok=True)
     yield
 
 app = FastAPI(title="MeganSoft HRMS API", version="1.0.0", lifespan=lifespan)

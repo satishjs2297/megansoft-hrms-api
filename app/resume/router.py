@@ -23,6 +23,11 @@ class SkillExtractionRequest(BaseModel):
     jd_text: str
 
 
+class StructureResumeRequest(BaseModel):
+    extracted_text: str
+    job_description_text: Optional[str] = ""
+
+
 @router.post("/extract", response_model=ExtractResponse)
 async def extract_resume_text(
     file: UploadFile = File(...),
@@ -38,15 +43,16 @@ async def extract_resume_text(
 
 @router.post("/structure", response_model=StructuredResume)
 async def structure_resume(
-    payload: dict,
+    payload: StructureResumeRequest,
     current_user: str = Depends(get_current_user)
 ):
-    extracted_text = payload.get("extracted_text", "")
+    extracted_text = payload.extracted_text
     if not extracted_text:
         raise HTTPException(status_code=400, detail="extracted_text is required")
+    job_description_text = payload.job_description_text or ""
     processor = LLMProcessor()
     try:
-        resume = processor.process_resume(extracted_text)
+        resume = processor.process_resume(extracted_text, job_description_text=job_description_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM processing failed: {str(e)}")
     return resume
@@ -55,10 +61,10 @@ async def structure_resume(
 @router.post("/generate")
 async def generate_resume(
     resume_data: StructuredResume,
-    template_id: str = "ford-india-resume-template-v2.docx",
+    template_id: str = "ford-india-resume-template.docx",
     current_user: str = Depends(get_current_user)
 ):
-    template_path = os.path.join(settings.templates_dir, template_id)
+    template_path = os.path.join(settings.resolved_templates_dir, template_id)
     if not os.path.exists(template_path):
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
     try:
@@ -82,7 +88,7 @@ async def upload_template(
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only .docx templates allowed")
     content = await file.read()
-    save_path = os.path.join(settings.templates_dir, file.filename)
+    save_path = os.path.join(settings.resolved_templates_dir, file.filename)
     with open(save_path, "wb") as f:
         f.write(content)
     return {"message": "Template uploaded", "template_id": file.filename}

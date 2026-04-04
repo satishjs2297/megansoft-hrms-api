@@ -66,10 +66,12 @@ class StructuredResume(BaseModel):
     designation: Optional[str] = None
     summary: Optional[str] = None
     career_summary: List[str] = Field(default_factory=list)
+    relevant_skills: List[str] = Field(default_factory=list)
     experience: List[Experience] = Field(default_factory=list)
     education: List[Education] = Field(default_factory=list)
     skills: List[Skill] = Field(default_factory=list)
     projects: List[Project] = Field(default_factory=list)
     certifications: List[Certification] = Field(default_factory=list)
     languages: List[Language] = Field(default_factory=list)
+    candidate_photo_base64: Optional[str] = None
     additional_info: Optional[dict] = None

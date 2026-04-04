@@ -1,8 +1,13 @@
 import os
 import tempfile
 import logging
+import base64
 from datetime import datetime
-from docxtpl import DocxTemplate
+from io import BytesIO
+from typing import Optional
+from PIL import Image
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
 from app.resume.schemas import StructuredResume
 from app.config import get_settings
 
@@ -14,8 +19,14 @@ def generate_resume_docx(resume_data: StructuredResume, template_path: str) -> b
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"Template not found: {template_path}")
     doc = DocxTemplate(template_path)
-    context = _prepare_context(resume_data)
-    doc.render(context)
+    photo_tmp_path: Optional[str] = None
+    try:
+        photo_tmp_path = _prepare_candidate_photo_file(resume_data)
+        context = _prepare_context(resume_data, doc, photo_tmp_path)
+        doc.render(context)
+    finally:
+        if photo_tmp_path and os.path.exists(photo_tmp_path):
+            os.unlink(photo_tmp_path)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         doc.save(tmp.name)
         tmp_path = tmp.name
@@ -26,7 +37,7 @@ def generate_resume_docx(resume_data: StructuredResume, template_path: str) -> b
         os.unlink(tmp_path)
 
 
-def _prepare_context(resume_data: StructuredResume) -> dict:
+def _prepare_context(resume_data: StructuredResume, doc: DocxTemplate, photo_tmp_path: Optional[str] = None) -> dict:
     contact = resume_data.contact
     first_name = contact.first_name or ""
     last_name = contact.last_name or ""
@@ -34,6 +45,8 @@ def _prepare_context(resume_data: StructuredResume) -> dict:
         parts = contact.name.split()
         first_name = parts[0] if parts else ""
         last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
+    relevant_skill_names = _resolve_relevant_skill_names(resume_data)
+    relevant_skill_groups = _resolve_relevant_skill_groups(resume_data, relevant_skill_names)
     context = {
         "name": contact.name,
         "first_name": first_name,
@@ -57,7 +70,13 @@ def _prepare_context(resume_data: StructuredResume) -> dict:
         "worked_with_ford_agency_before": contact.worked_with_ford_agency_before or "No",
         "designation": resume_data.designation or "",
         "summary": resume_data.summary or "",
+        "candidate_photo": InlineImage(doc, photo_tmp_path, width=Mm(35), height=Mm(45)) if photo_tmp_path else "",
         "career_summary": resume_data.career_summary or [],
+        "relevant_skills": relevant_skill_groups,
+        "relavent_skills": relevant_skill_groups,
+        "relevantSkills": relevant_skill_groups,
+        "relaventSkills": relevant_skill_groups,
+        "relevant_skill_names": relevant_skill_names,
         "experience": [
             {
                 "company": exp.company,
@@ -87,7 +106,109 @@ def _prepare_context(resume_data: StructuredResume) -> dict:
             for c in resume_data.certifications
         ],
     }
+    logger.info("relevant_skills in template context: %s", context["relevant_skills"])
     return context
+
+
+def _prepare_candidate_photo_file(resume_data: StructuredResume) -> Optional[str]:
+    raw = (resume_data.candidate_photo_base64 or "").strip()
+    if not raw:
+        raw = ((resume_data.additional_info or {}).get("candidate_photo_base64") or "").strip()
+    if not raw:
+        return None
+    try:
+        image_bytes = _decode_base64_image(raw)
+        resized = _resize_to_indian_passport(image_bytes)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(resized)
+            tmp.flush()
+            logger.info("candidate photo prepared at path=%s", tmp.name)
+            return tmp.name
+    except Exception:
+        logger.exception("candidate photo processing failed")
+        return None
+
+
+def _decode_base64_image(raw: str) -> bytes:
+    payload = raw
+    if "," in raw and raw.lower().startswith("data:"):
+        payload = raw.split(",", 1)[1]
+    return base64.b64decode(payload)
+
+
+def _resize_to_indian_passport(image_bytes: bytes) -> bytes:
+    target_w, target_h = 413, 531  # ~35x45mm at 300 DPI
+    target_ratio = target_w / target_h
+    with Image.open(BytesIO(image_bytes)) as img:
+        converted = img.convert("RGB")
+        src_w, src_h = converted.size
+        src_ratio = src_w / src_h if src_h else target_ratio
+        if src_ratio > target_ratio:
+            crop_w = int(src_h * target_ratio)
+            left = max(0, (src_w - crop_w) // 2)
+            box = (left, 0, left + crop_w, src_h)
+        else:
+            crop_h = int(src_w / target_ratio) if target_ratio else src_h
+            top = max(0, (src_h - crop_h) // 2)
+            box = (0, top, src_w, top + crop_h)
+        cropped = converted.crop(box)
+        resized = cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        out = BytesIO()
+        resized.save(out, format="PNG")
+        return out.getvalue()
+
+
+def _resolve_relevant_skill_names(resume_data: StructuredResume) -> list[str]:
+    if resume_data.relevant_skills:
+        return resume_data.relevant_skills[:3]
+    all_skills: list[str] = []
+    for group in resume_data.skills:
+        all_skills.extend(group.skills)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for skill in all_skills:
+        key = skill.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(skill.strip())
+    return unique[:3]
+
+
+def _resolve_relevant_skill_groups(resume_data: StructuredResume, relevant_skill_names: list[str]) -> list[dict]:
+    normalized_targets = [s.strip().lower() for s in relevant_skill_names if s.strip()]
+    groups: list[dict] = []
+    for group in resume_data.skills:
+        matched: list[str] = []
+        for skill in group.skills:
+            skill_text = (skill or "").strip()
+            if not skill_text:
+                continue
+            skill_l = skill_text.lower()
+            if any(
+                target == skill_l or target in skill_l or skill_l in target
+                for target in normalized_targets
+            ):
+                matched.append(skill_text)
+        if matched:
+            groups.append({"category": group.category, "skills": _dedupe_keep_order(matched)})
+    if groups:
+        return groups
+    if relevant_skill_names:
+        return [{"category": "Relevant Skills", "skills": _dedupe_keep_order(relevant_skill_names)}]
+    return []
+
+
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        key = value.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(value.strip())
+    return result
 
 
 def _format_ddmmyyyy(value) -> str:
@@ -111,11 +232,12 @@ def _format_ddmmyyyy(value) -> str:
 
 
 def list_templates() -> list[dict]:
-    templates_dir = settings.templates_dir
+    templates_dir = settings.resolved_templates_dir
     if not os.path.exists(templates_dir):
         return []
     result = []
     for fname in os.listdir(templates_dir):
-        if fname.endswith(".docx"):
+        if fname.lower().endswith(".docx"):
             result.append({"id": fname, "name": fname.replace("-", " ").replace("_", " ").replace(".docx", "").title(), "filename": fname})
+    result.sort(key=lambda item: item["name"])
     return result

@@ -1,8 +1,8 @@
 import json
 import logging
-import os
+import re
 import time
-from typing import Optional, Literal
+from typing import Optional
 from app.resume.schemas import StructuredResume
 from app.config import get_settings
 
@@ -35,9 +35,9 @@ class LLMProcessor:
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
 
-    def process_resume(self, extracted_text: str) -> StructuredResume:
+    def process_resume(self, extracted_text: str, job_description_text: str = "") -> StructuredResume:
         started = time.perf_counter()
-        prompt = self._build_resume_prompt(extracted_text)
+        prompt = self._build_resume_prompt(extracted_text, job_description_text=job_description_text)
         try:
             if self.provider in ("openai", "azure-openai"):
                 response = self._call_openai(prompt)
@@ -59,7 +59,8 @@ class LLMProcessor:
                 else:
                     response = self._call_anthropic(prompt)
                 resume_data = self._parse_json_response(response)
-            resume_data = self._clean_resume_data(resume_data)
+            resume_data = self._clean_resume_data(resume_data, job_description_text=job_description_text)
+            logger.info("relevant_skills selected: %s", resume_data.get("relevant_skills", []))
             return StructuredResume(**resume_data)
         except Exception:
             logger.exception("process_resume failed provider=%s model=%s", self.provider, self.model)
@@ -141,7 +142,12 @@ Rules:
             if elapsed >= settings.llm_slow_log_threshold_seconds:
                 logger.warning("generate_assessment_summary slow provider=%s model=%s elapsed=%.2fs", self.provider, self.model, elapsed)
 
-    def _build_resume_prompt(self, extracted_text: str) -> str:
+    def _build_resume_prompt(self, extracted_text: str, job_description_text: str = "") -> str:
+        jd_section = f"""
+
+JOB DESCRIPTION (use this to tailor output and identify top 3 relevant skills):
+{job_description_text}
+""" if job_description_text else ""
         return f"""You are a professional resume writer. Parse and ENHANCE the resume below into structured JSON.
 
 GOAL: Produce an improved, client-ready version that gets the candidate shortlisted.
@@ -154,6 +160,13 @@ ENHANCEMENT RULES:
 - Remove filler phrases ("Involved in", "Worked on", "Working on") — replace with direct action statements.
 - Keep technical accuracy — do not invent technologies or achievements not implied by the original text.
 - Maintain the professional tone suitable for client submission.
+
+JD ALIGNMENT RULES (apply when Job Description is provided):
+- Re-rank and emphasize the candidate's existing experience to best match JD priorities.
+- Rewrite each experience description bullet to foreground JD-relevant skills, tools, and business outcomes.
+- Use JD terminology naturally in summary, career_summary, and experience bullets when supported by the resume.
+- Prefer JD-relevant responsibilities first in each role, while still keeping all original responsibilities.
+- Do NOT fabricate new projects, tools, domains, certifications, or measurable outcomes not grounded in the resume.
 
 Return this exact JSON structure:
 {{
@@ -172,6 +185,7 @@ Return this exact JSON structure:
   "designation": "current or most recent job title",
   "summary": "2-3 sentence professional summary highlighting key strengths, years of experience, and core expertise",
   "career_summary": ["enhanced professional bullet points covering key competencies — preserve all points from original, rewrite for impact"],
+  "relevant_skills": ["top skill 1", "top skill 2", "top skill 3"],
   "experience": [
     {{
       "company": "employer name",
@@ -213,13 +227,16 @@ OUTPUT RULES:
 - Return ONLY valid JSON, no markdown, no explanation.
 - Use empty string "" for missing text fields, empty arrays [] for missing lists.
 - Never return null for string fields — use "".
+- relevant_skills must always contain exactly 3 skills that best match both resume and job description (if JD is provided).
+- If JD is provided, summary and experience descriptions must be explicitly optimized for JD fit using only truthful resume evidence.
 - Do NOT merge or skip any experience roles — include every role from the original.
 - Do NOT drop any responsibility bullets — enhance each one.
 - Do NOT invent new skills or technologies not present in the original.
 - skills: group into 6-12 meaningful categories.
 
 Resume Text:
-{extracted_text}"""
+{extracted_text}
+{jd_section}"""
 
     def _parse_json_response(self, response: str) -> dict:
         text = response.strip()
@@ -254,7 +271,7 @@ Resume Text:
         repaired += "]" * open_brackets + "}" * open_braces
         return json.loads(repaired)
 
-    def _clean_resume_data(self, data: dict) -> dict:
+    def _clean_resume_data(self, data: dict, job_description_text: str = "") -> dict:
         if "contact" not in data:
             data["contact"] = {}
         contact = data["contact"]
@@ -315,6 +332,13 @@ Resume Text:
             if category and skills_list:
                 cleaned_skills.append({"category": category, "skills": skills_list})
         data["skills"] = cleaned_skills
+        relevant_skills = data.get("relevant_skills") or []
+        if isinstance(relevant_skills, str):
+            relevant_skills = [s.strip() for s in relevant_skills.split(",") if s.strip()]
+        relevant_skills = [str(s).strip() for s in relevant_skills if str(s).strip()]
+        if not relevant_skills:
+            relevant_skills = self._derive_relevant_skills(data, job_description_text)
+        data["relevant_skills"] = relevant_skills[:3]
         if not data.get("certifications"):
             data["certifications"] = []
         for cert in data["certifications"]:
@@ -324,6 +348,51 @@ Resume Text:
         if not isinstance(data.get("additional_info"), dict):
             data["additional_info"] = None
         return data
+
+    def _derive_relevant_skills(self, data: dict, job_description_text: str = "") -> list[str]:
+        candidates: list[str] = []
+        for skill_group in data.get("skills", []):
+            skills = skill_group.get("skills") or []
+            candidates.extend(str(skill).strip() for skill in skills if str(skill).strip())
+        for exp in data.get("experience", []):
+            techs = exp.get("technologies") or []
+            candidates.extend(str(tech).strip() for tech in techs if str(tech).strip())
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for skill in candidates:
+            key = skill.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(skill)
+        if not deduped:
+            return []
+
+        jd = (job_description_text or "").lower()
+        if not jd:
+            return deduped[:3]
+
+        tokens = set(re.findall(r"[a-zA-Z0-9+.#-]+", jd))
+        scored: list[tuple[int, int, str]] = []
+        for idx, skill in enumerate(deduped):
+            lowered = skill.lower()
+            if len(lowered) < 2:
+                continue
+            exact_hits = jd.count(lowered)
+            token_hits = 1 if lowered in tokens else 0
+            score = (exact_hits * 2) + token_hits
+            scored.append((score, idx, skill))
+
+        scored.sort(key=lambda row: (-row[0], row[1]))
+        top = [skill for score, _, skill in scored if score > 0][:3]
+        if len(top) < 3:
+            for skill in deduped:
+                if skill not in top:
+                    top.append(skill)
+                if len(top) == 3:
+                    break
+        return top[:3]
 
     def _call_openai(self, prompt: str, max_completion_tokens_override: Optional[int] = None) -> str:
         max_completion_tokens = max(256, max_completion_tokens_override or settings.llm_max_completion_tokens)
