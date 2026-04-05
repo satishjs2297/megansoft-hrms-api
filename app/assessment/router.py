@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+import json
+import logging
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import Dict
 from pydantic import BaseModel
@@ -7,6 +11,7 @@ from app.database import get_db
 from app.assessment.schemas import AssessmentCreate
 from app.assessment import service
 from app.resume.llm_processor import LLMProcessor
+from app.security.rate_limiter import rate_limit
 
 
 class SummarizeRequest(BaseModel):
@@ -15,12 +20,14 @@ class SummarizeRequest(BaseModel):
     skill_ratings: Dict[str, str]
 
 router = APIRouter()
+audit_logger = logging.getLogger("audit")
 
 
 @router.post("/summarize")
 def summarize_assessment(
     data: SummarizeRequest,
-    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
+    current_user: CurrentUser = Depends(require_permissions("assessment:write")),
+    _: None = Depends(rate_limit("heavy")),
 ):
     try:
         processor = LLMProcessor()
@@ -36,11 +43,38 @@ def summarize_assessment(
 
 @router.post("")
 def create_assessment(
+    request: Request,
     data: AssessmentCreate,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
+    current_user: CurrentUser = Depends(require_permissions("assessment:write")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    return service.create_assessment(db, data)
+    if idempotency_key:
+        request_hash = service.compute_request_hash(data)
+        existing = service.get_idempotent_response(db, idempotency_key)
+        if existing:
+            if existing.request_hash != request_hash:
+                raise HTTPException(status_code=409, detail="Idempotency key reused with different payload")
+            return json.loads(existing.response_json)
+
+        created = service.create_assessment(db, data)
+        service.save_idempotent_response(db, idempotency_key, request_hash, created, status_code=200)
+        _audit(
+            action="assessment.create",
+            username=current_user.username,
+            request=request,
+            details={"assessment_id": created.get("id"), "idempotency_key": idempotency_key},
+        )
+        return created
+
+    created = service.create_assessment(db, data)
+    _audit(
+        action="assessment.create",
+        username=current_user.username,
+        request=request,
+        details={"assessment_id": created.get("id"), "idempotency_key": None},
+    )
+    return created
 
 
 @router.get("")
@@ -50,6 +84,8 @@ def list_assessments(
     feedbackStatus: str = "",
     fromDate: str = "",
     toDate: str = "",
+    sortBy: str = "created_at",
+    sortOrder: str = "desc",
     pageNo: int = 1,
     maxRecords: int = 10,
     db: Session = Depends(get_db),
@@ -65,6 +101,8 @@ def list_assessments(
         feedback_status=feedbackStatus,
         date_from=fromDate,
         date_to=toDate,
+        sort_by=sortBy,
+        sort_order=sortOrder,
     )
     total = len(records)
     selected = sum(1 for r in records if "Select" in r["assessment_status"])
@@ -107,6 +145,7 @@ def get_assessment(
 
 @router.delete("/{assessment_id}")
 def delete_assessment(
+    request: Request,
     assessment_id: int,
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(require_permissions("assessment:write"))
@@ -114,4 +153,22 @@ def delete_assessment(
     deleted = service.delete_assessment(db, assessment_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    _audit(
+        action="assessment.delete",
+        username=current_user.username,
+        request=request,
+        details={"assessment_id": assessment_id},
+    )
     return {"message": "Deleted successfully"}
+
+
+def _audit(action: str, username: str, request: Request, details: dict | None = None):
+    payload = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "action": action,
+        "username": username,
+        "request_id": getattr(request.state, "request_id", None),
+        "ip": request.client.host if request.client else None,
+        "details": details or {},
+    }
+    audit_logger.info(json.dumps(payload))

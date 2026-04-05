@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     admin_secret: str = ""
     auth_config_file: str = "app/auth/rbac_config.json"
     access_token_expire_minutes: int = 480
+    refresh_token_expire_days: int = 30
+    auth_session_max_devices: int = 10
+    idempotency_ttl_minutes: int = 60
+    login_rate_limit_per_minute: int = 30
+    heavy_rate_limit_per_minute: int = 60
 
     llm_provider: str = "azure-openai"
     llm_model: str = "gpt-4.1"
@@ -21,7 +26,7 @@ class Settings(BaseSettings):
 
     use_ocr: bool = True
     database_url: str = "sqlite:///./hrms.db"
-    allowed_origins: str = "http://localhost:4200,http://localhost:3000"
+    allowed_origins: str = "http://localhost:4200,http://localhost:3000,http://localhost:19006,http://localhost:8081"
 
     templates_dir: str = "templates"
     output_dir: str = "output"

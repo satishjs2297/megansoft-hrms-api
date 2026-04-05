@@ -1,8 +1,12 @@
 import json
-from datetime import datetime
+import hashlib
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
-from app.database import AssessmentRecord
+from app.config import get_settings
+from app.database import AssessmentRecord, IdempotencyRecord
 from app.assessment.schemas import AssessmentCreate
+
+settings = get_settings()
 
 
 def create_assessment(db: Session, data: AssessmentCreate) -> AssessmentRecord:
@@ -21,6 +25,49 @@ def create_assessment(db: Session, data: AssessmentCreate) -> AssessmentRecord:
     return _deserialize(record)
 
 
+def save_idempotent_response(
+    db: Session,
+    idempotency_key: str,
+    request_hash: str,
+    response_payload: dict,
+    status_code: int = 200,
+) -> None:
+    existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == idempotency_key).first()
+    if existing:
+        existing.request_hash = request_hash
+        existing.response_json = json.dumps(response_payload, default=str)
+        existing.status_code = status_code
+        existing.expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.idempotency_ttl_minutes)
+    else:
+        db.add(
+            IdempotencyRecord(
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                response_json=json.dumps(response_payload, default=str),
+                status_code=status_code,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.idempotency_ttl_minutes),
+            )
+        )
+    db.commit()
+
+
+def get_idempotent_response(db: Session, idempotency_key: str) -> IdempotencyRecord | None:
+    record = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == idempotency_key).first()
+    if not record:
+        return None
+    if record.expires_at < datetime.now(timezone.utc):
+        db.delete(record)
+        db.commit()
+        return None
+    return record
+
+
+def compute_request_hash(data: AssessmentCreate) -> str:
+    payload = data.model_dump(mode="json")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def get_all_assessments(
     db: Session,
     search: str = "",
@@ -28,8 +75,19 @@ def get_all_assessments(
     feedback_status: str = "",
     date_from: str = "",
     date_to: str = "",
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
 ) -> list:
-    query = db.query(AssessmentRecord).order_by(AssessmentRecord.created_at.desc())
+    sort_key = (sort_by or "created_at").strip().lower()
+    sort_dir = (sort_order or "desc").strip().lower()
+    if sort_key not in {"created_at", "date_of_interview", "candidate_name", "panel_name", "assessment_status"}:
+        sort_key = "created_at"
+
+    sort_col = getattr(AssessmentRecord, sort_key)
+    if sort_dir == "asc":
+        query = db.query(AssessmentRecord).order_by(sort_col.asc())
+    else:
+        query = db.query(AssessmentRecord).order_by(sort_col.desc())
     results = query.all()
     records = [_deserialize(r) for r in results]
 
