@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict
 from pydantic import BaseModel
-from app.auth.router import get_current_user
+from app.auth.router import CurrentUser, require_permissions
 from app.database import get_db
 from app.assessment.schemas import AssessmentCreate
 from app.assessment import service
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.post("/summarize")
 def summarize_assessment(
     data: SummarizeRequest,
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
 ):
     try:
         processor = LLMProcessor()
@@ -38,7 +38,7 @@ def summarize_assessment(
 def create_assessment(
     data: AssessmentCreate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
 ):
     return service.create_assessment(db, data)
 
@@ -53,7 +53,7 @@ def list_assessments(
     pageNo: int = 1,
     maxRecords: int = 10,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
 ):
     pageNo = max(pageNo, 1)
     maxRecords = max(maxRecords, 1)
@@ -97,7 +97,7 @@ def list_assessments(
 def get_assessment(
     assessment_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
 ):
     record = service.get_assessment_by_id(db, assessment_id)
     if not record:
@@ -109,7 +109,7 @@ def get_assessment(
 def delete_assessment(
     assessment_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("assessment:write"))
 ):
     deleted = service.delete_assessment(db, assessment_id)
     if not deleted:

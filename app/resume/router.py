@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from fastapi.responses import Response
-from app.auth.router import get_current_user
+from app.auth.router import CurrentUser, require_permissions
 from app.resume.schemas import StructuredResume
 from app.resume.extractor import extract_text
 from app.resume.llm_processor import LLMProcessor
@@ -31,7 +31,7 @@ class StructureResumeRequest(BaseModel):
 @router.post("/extract", response_model=ExtractResponse)
 async def extract_resume_text(
     file: UploadFile = File(...),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     content = await file.read()
     try:
@@ -44,7 +44,7 @@ async def extract_resume_text(
 @router.post("/structure", response_model=StructuredResume)
 async def structure_resume(
     payload: StructureResumeRequest,
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     extracted_text = payload.extracted_text
     if not extracted_text:
@@ -62,7 +62,7 @@ async def structure_resume(
 async def generate_resume(
     resume_data: StructuredResume,
     template_id: str = "ford-india-resume-template.docx",
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     template_path = os.path.join(settings.resolved_templates_dir, template_id)
     if not os.path.exists(template_path):
@@ -83,7 +83,7 @@ async def generate_resume(
 @router.post("/upload-template")
 async def upload_template(
     file: UploadFile = File(...),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only .docx templates allowed")
@@ -95,14 +95,14 @@ async def upload_template(
 
 
 @router.get("/templates")
-def get_templates(current_user: str = Depends(get_current_user)):
+def get_templates(current_user: CurrentUser = Depends(require_permissions("app:full_access"))):
     return list_templates()
 
 
 @router.post("/extract-jd-skills")
 async def extract_jd_skills(
     payload: SkillExtractionRequest,
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("resume:extract_jd_skills"))
 ):
     processor = LLMProcessor()
     try:

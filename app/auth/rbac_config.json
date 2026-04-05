@@ -1,0 +1,28 @@
+{
+  "roles": {
+    "candidate_assessment": {
+      "permissions": [
+        "assessment:write",
+        "resume:extract_jd_skills"
+      ]
+    },
+    "admin": {
+      "permissions": [
+        "*",
+        "app:full_access"
+      ]
+    }
+  },
+  "users": [
+    {
+      "username": "panel@megansoft.com",
+      "role": "candidate_assessment",
+      "secret_env": "panel_secret"
+    },
+    {
+      "username": "hr@megansoft.com",
+      "role": "admin",
+      "secret_env": "admin_secret"
+    }
+  ]
+}

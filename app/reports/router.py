@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from app.auth.router import get_current_user
+from app.auth.router import CurrentUser, require_permissions
 from app.database import get_db
 from app.assessment import service as assessment_service
 from app.reports.service import record_to_pdf, records_to_csv
@@ -14,7 +14,7 @@ router = APIRouter()
 def export_assessment_pdf(
     assessment_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     record = assessment_service.get_assessment_by_id(db, assessment_id)
     if not record:
@@ -32,7 +32,7 @@ def export_assessment_pdf(
 @router.get("/export/csv")
 def export_all_csv(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     records = assessment_service.get_all_assessments(db)
     csv_content = records_to_csv(records)
@@ -45,7 +45,7 @@ def export_all_csv(
 def export_single_csv(
     assessment_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     record = assessment_service.get_assessment_by_id(db, assessment_id)
     if not record:
