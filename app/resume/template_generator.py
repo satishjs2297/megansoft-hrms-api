@@ -39,6 +39,7 @@ def generate_resume_docx(resume_data: StructuredResume, template_path: str) -> b
 
 def _prepare_context(resume_data: StructuredResume, doc: DocxTemplate, photo_tmp_path: Optional[str] = None) -> dict:
     contact = resume_data.contact
+    certifications = _dedupe_certifications(resume_data.certifications)
     first_name = contact.first_name or ""
     last_name = contact.last_name or ""
     if not first_name and not last_name and contact.name:
@@ -59,10 +60,10 @@ def _prepare_context(resume_data: StructuredResume, doc: DocxTemplate, photo_tmp
         "linkedin": contact.linkedin or "",
         "github": contact.github or "",
         "website": contact.website or "",
-        "notice_period": contact.notice_period or "",
+        "notice_period": _format_notice_period(contact.notice_period),
         "candidate_type": contact.candidate_type or "External",
-        "interview_availability": _format_ddmmyyyy(contact.interview_availability),
-        "start_availability": _format_ddmmyyyy(contact.start_availability),
+        "interview_availability": _format_ddmmyyyy_slash(contact.interview_availability),
+        "start_availability": _format_ddmmyyyy_slash(contact.start_availability),
         "total_experience_years": contact.total_experience_years or "0",
         "relevant_experience_years": contact.relevant_experience_years or "0",
         "hacker_rank_score": contact.hacker_rank_score or "",
@@ -102,9 +103,16 @@ def _prepare_context(resume_data: StructuredResume, doc: DocxTemplate, photo_tmp
         ],
         "skills": [{"category": s.category, "skills": s.skills} for s in resume_data.skills],
         "certifications": [
-            {"name": c.name, "issuer": c.issuer, "date": _format_ddmmyyyy(c.date)}
-            for c in resume_data.certifications
+            {
+                "name": c.name,
+                "issuer": "",
+                "date": "",
+                "credential_id": "",
+                "credential_url": "",
+            }
+            for c in certifications
         ],
+        "certifications_secondary": [],
     }
     logger.info("relevant_skills in template context: %s", context["relevant_skills"])
     return context
@@ -208,6 +216,38 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
     return result
 
 
+def _dedupe_certifications(certifications) -> list:
+    result = []
+    seen: set[str] = set()
+    for cert in certifications or []:
+        name = _normalize_certification_part(getattr(cert, "name", ""))
+        issuer = _normalize_certification_part(getattr(cert, "issuer", ""))
+        date = _normalize_certification_part(getattr(cert, "date", ""))
+        key = f"{name}|{issuer}|{date}".strip("|")
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cert)
+    return result
+
+
+def _normalize_certification_part(value: str) -> str:
+    text = str(value or "").strip().rstrip(".")
+    text = " ".join(text.split())
+    return text.lower()
+
+
+def _format_notice_period(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        return f"{text} Days"
+    return text
+
+
 def _format_ddmmyyyy(value) -> str:
     if value is None:
         return ""
@@ -226,6 +266,11 @@ def _format_ddmmyyyy(value) -> str:
         except ValueError:
             continue
     return str(value)
+
+
+def _format_ddmmyyyy_slash(value) -> str:
+    formatted = _format_ddmmyyyy(value)
+    return formatted.replace("-", "/") if formatted else ""
 
 
 def list_templates() -> list[dict]:
