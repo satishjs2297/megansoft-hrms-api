@@ -3,26 +3,16 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from app.config import get_settings
-from app.database import AssessmentRecord, IdempotencyRecord
+from app.database import IdempotencyRecord
+from app.assessment.gcs_storage import get_assessment_storage
 from app.assessment.schemas import AssessmentCreate
 
 settings = get_settings()
 
 
-def create_assessment(db: Session, data: AssessmentCreate) -> AssessmentRecord:
-    record = AssessmentRecord(
-        candidate_name=data.candidate_name,
-        panel_name=data.panel_name,
-        date_of_interview=data.date_of_interview,
-        assessment_status=data.assessment_status,
-        skills_assessment=json.dumps(data.skills_assessment),
-        overall_observation=data.overall_observation,
-        job_description_text=data.job_description_text,
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return _deserialize(record)
+def create_assessment(db: Session, data: AssessmentCreate) -> dict:
+    payload = data.model_dump(mode="json")
+    return get_assessment_storage().create(payload)
 
 
 def save_idempotent_response(
@@ -83,13 +73,7 @@ def get_all_assessments(
     if sort_key not in {"created_at", "date_of_interview", "candidate_name", "panel_name", "assessment_status"}:
         sort_key = "created_at"
 
-    sort_col = getattr(AssessmentRecord, sort_key)
-    if sort_dir == "asc":
-        query = db.query(AssessmentRecord).order_by(sort_col.asc())
-    else:
-        query = db.query(AssessmentRecord).order_by(sort_col.desc())
-    results = query.all()
-    records = [_deserialize(r) for r in results]
+    records = get_assessment_storage().list()
 
     if search:
         q = search.lower()
@@ -113,38 +97,29 @@ def get_all_assessments(
         if to_date:
             records = [r for r in records if _record_date_in_range(r["date_of_interview"], None, to_date)]
 
-    return records
+    return _sort_records(records, sort_key, sort_dir)
 
 
 def get_assessment_by_id(db: Session, assessment_id: int) -> dict:
-    record = db.query(AssessmentRecord).filter(AssessmentRecord.id == assessment_id).first()
-    if not record:
-        return None
-    return _deserialize(record)
+    return get_assessment_storage().get(assessment_id)
 
 
 def delete_assessment(db: Session, assessment_id: int) -> bool:
-    record = db.query(AssessmentRecord).filter(AssessmentRecord.id == assessment_id).first()
-    if not record:
-        return False
-    db.delete(record)
-    db.commit()
-    return True
+    return get_assessment_storage().delete(assessment_id)
 
 
-def _deserialize(record: AssessmentRecord) -> dict:
-    d = {
-        "id": record.id,
-        "candidate_name": record.candidate_name,
-        "panel_name": record.panel_name,
-        "date_of_interview": record.date_of_interview,
-        "assessment_status": record.assessment_status,
-        "skills_assessment": json.loads(record.skills_assessment) if isinstance(record.skills_assessment, str) else record.skills_assessment,
-        "overall_observation": record.overall_observation,
-        "job_description_text": record.job_description_text,
-        "created_at": record.created_at,
-    }
-    return d
+def _sort_records(records: list[dict], sort_key: str, sort_dir: str) -> list[dict]:
+    reverse = sort_dir != "asc"
+
+    def sort_value(record: dict):
+        value = record.get(sort_key)
+        if sort_key == "date_of_interview":
+            return _safe_parse_date(value) or datetime.min.date()
+        if sort_key == "created_at":
+            return _safe_parse_datetime(value) or datetime.min.replace(tzinfo=timezone.utc)
+        return str(value or "").lower()
+
+    return sorted(records, key=sort_value, reverse=reverse)
 
 
 def _safe_parse_date(value: str):
@@ -160,6 +135,18 @@ def _safe_parse_date(value: str):
         except ValueError:
             continue
     return None
+
+
+def _safe_parse_datetime(value: str):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
 
 
 def _record_date_in_range(raw_date: str, from_date=None, to_date=None) -> bool:

@@ -17,6 +17,8 @@ ENV/
 # Environment / secrets
 .env
 !.env.example
+*sa-key*.json
+*service-account*.json
 
 # Build / dist
 build/

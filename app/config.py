@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     templates_dir: str = "templates"
     output_dir: str = "output"
+    google_application_credentials: str = ""
+    google_cloud_storage_bucket: str = ""
+    assessment_storage_prefix: str = "candidate-assessments"
 
     class Config:
         env_file = ".env"
