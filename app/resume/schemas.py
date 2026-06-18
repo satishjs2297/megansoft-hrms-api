@@ -1,6 +1,6 @@
 import re
-from typing import List, Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import List, Optional, Any
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class Contact(BaseModel):
     name: str
@@ -76,6 +76,30 @@ class StructuredResume(BaseModel):
     languages: List[Language] = Field(default_factory=list)
     candidate_photo_base64: Optional[str] = None
     additional_info: Optional[dict] = None
+
+    @field_validator("languages", mode="before")
+    @classmethod
+    def coerce_languages(cls, value: Any):
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+
+        normalized = []
+        for item in value:
+            if isinstance(item, str):
+                language = item.strip()
+                if language:
+                    normalized.append({"language": language, "proficiency": ""})
+                continue
+            if isinstance(item, dict):
+                language = str(item.get("language") or item.get("name") or item.get("label") or "").strip()
+                proficiency = str(item.get("proficiency") or item.get("level") or "").strip()
+                if language:
+                    normalized.append({"language": language, "proficiency": proficiency})
+        return normalized
 
     @model_validator(mode="after")
     def dedupe_certifications(self):
