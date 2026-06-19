@@ -126,29 +126,33 @@ def record_to_pdf(record: dict) -> bytes:
     return buf.getvalue()
 
 
-def records_to_csv(records: list) -> str:
+def records_to_csv(records: list, include_skill_columns: bool = True) -> str:
     if not records:
         return ""
-    all_skills = []
-    seen = set()
-    for r in records:
-        for skill in r.get("skills_assessment", {}):
-            if skill not in seen:
-                all_skills.append(skill)
-                seen.add(skill)
-    base_fields = ["id", "candidate_name", "panel_name", "date_of_interview", "assessment_status", "overall_observation", "created_at"]
-    fieldnames = base_fields + [f"skill_{s}" for s in all_skills]
+    base_fields = ["id", "candidate_name", "panel_name", "date_of_interview", "status", "overall_observation", "created_at"]
+    skill_fields: list[str] = []
+    if include_skill_columns:
+        all_skills = []
+        seen = set()
+        for r in records:
+            for skill in r.get("skills_assessment", {}):
+                if skill not in seen:
+                    all_skills.append(skill)
+                    seen.add(skill)
+        skill_fields = [f"skill_{s}" for s in all_skills]
+    fieldnames = base_fields + skill_fields
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for r in records:
         row = {
             "id": r["id"], "candidate_name": r["candidate_name"], "panel_name": r["panel_name"],
-            "date_of_interview": _format_ddmmyyyy(r.get("date_of_interview")), "assessment_status": r["assessment_status"],
+            "date_of_interview": _format_ddmmyyyy(r.get("date_of_interview")), "status": r["assessment_status"],
             "overall_observation": r.get("overall_observation", ""), "created_at": _format_ddmmyyyy(r.get("created_at")),
         }
-        for skill in all_skills:
-            row[f"skill_{skill}"] = r.get("skills_assessment", {}).get(skill, "")
+        if include_skill_columns:
+            for skill in all_skills:
+                row[f"skill_{skill}"] = r.get("skills_assessment", {}).get(skill, "")
         writer.writerow(row)
     return output.getvalue()
 

@@ -50,7 +50,7 @@ def export_all_csv(
     _: None = Depends(rate_limit("heavy")),
 ):
     records = assessment_service.get_all_assessments(db)
-    csv_content = records_to_csv(records)
+    csv_content = records_to_csv(records, include_skill_columns=False)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"candidate_assessments_{timestamp}.csv"
     _audit(
