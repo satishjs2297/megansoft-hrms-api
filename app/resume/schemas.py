@@ -1,5 +1,6 @@
-from typing import List, Optional
-from pydantic import BaseModel, Field
+import re
+from typing import List, Optional, Any
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class Contact(BaseModel):
     name: str
@@ -66,10 +67,162 @@ class StructuredResume(BaseModel):
     designation: Optional[str] = None
     summary: Optional[str] = None
     career_summary: List[str] = Field(default_factory=list)
+    relevant_skills: List[str] = Field(default_factory=list)
     experience: List[Experience] = Field(default_factory=list)
     education: List[Education] = Field(default_factory=list)
     skills: List[Skill] = Field(default_factory=list)
     projects: List[Project] = Field(default_factory=list)
     certifications: List[Certification] = Field(default_factory=list)
     languages: List[Language] = Field(default_factory=list)
+    candidate_photo_base64: Optional[str] = None
     additional_info: Optional[dict] = None
+
+    @field_validator("languages", mode="before")
+    @classmethod
+    def coerce_languages(cls, value: Any):
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+
+        normalized = []
+        for item in value:
+            if isinstance(item, str):
+                language = item.strip()
+                if language:
+                    normalized.append({"language": language, "proficiency": ""})
+                continue
+            if isinstance(item, dict):
+                language = str(item.get("language") or item.get("name") or item.get("label") or "").strip()
+                proficiency = str(item.get("proficiency") or item.get("level") or "").strip()
+                if language:
+                    normalized.append({"language": language, "proficiency": proficiency})
+        return normalized
+
+    @model_validator(mode="after")
+    def dedupe_certifications(self):
+        merged: list[Certification] = []
+        key_to_index: dict[str, int] = {}
+
+        for cert in self.certifications or []:
+            name = _clean_certification_name(cert.name)
+            if not name:
+                continue
+
+            key = _canonical_certification_name_key(name)
+            if not key:
+                continue
+
+            existing_index = key_to_index.get(key)
+            if existing_index is None:
+                credential_id = (cert.credential_id or "").strip() or _extract_credential_id_from_name(cert.name)
+                merged.append(Certification(
+                    name=name,
+                    issuer=(cert.issuer or "").strip(),
+                    date=(cert.date or "").strip(),
+                    credential_id=credential_id,
+                    credential_url=(cert.credential_url or "").strip(),
+                ))
+                key_to_index[key] = len(merged) - 1
+                continue
+
+            existing = merged[existing_index]
+            existing.name = _prefer_certification_name(existing.name, name)
+            existing.issuer = existing.issuer or (cert.issuer or "").strip()
+            existing.date = _prefer_certification_date(existing.date, (cert.date or "").strip())
+            existing.credential_id = existing.credential_id or (cert.credential_id or "").strip() or _extract_credential_id_from_name(cert.name)
+            existing.credential_url = existing.credential_url or (cert.credential_url or "").strip()
+
+        self.certifications = merged
+        return self
+
+
+def _clean_certification_name(name: str) -> str:
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"\((?:[^)]*(?:certification|credential|license|licen[cs]e|id|number|no\.?)\s*[:#-]?[^)]*)\)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\(([A-Z]{1,10}\d[\w.-]{3,})\)", "", text)
+    text = re.sub(
+        r"\s*(?:[-|,])?\s*(?:certification|credential|license|licen[cs]e)\s*(?:id|number|no\.?)\s*[:#-]\s*[A-Za-z0-9-]+\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\.\s*$", "", text)
+    text = re.sub(r"^\s*certified\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" ,;:-")
+    return text
+
+
+def _extract_credential_id_from_name(name: str) -> str:
+    text = str(name or "")
+    if not text:
+        return ""
+    patterns = [
+        r"(?:certification|credential|license|licen[cs]e|id|number|no\.?)\s*[:#-]\s*([A-Za-z0-9-]+)",
+        r"\([A-Z]{2,10}\s+ID:\s*([A-Za-z0-9-]+)\)",
+        r"\(([A-Z]{1,10}\d[\w.-]{3,})\)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _normalize_certification_key_part(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _canonical_certification_name_key(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\([A-Z0-9.+-]{2,12}\)", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,;:-")
+    return _normalize_certification_key_part(text)
+
+
+def _prefer_certification_name(current: str, candidate: str) -> str:
+    current = str(current or "").strip()
+    candidate = str(candidate or "").strip()
+    if not current:
+        return candidate
+    if not candidate:
+        return current
+
+    current_clean = _clean_certification_name(current)
+    candidate_clean = _clean_certification_name(candidate)
+
+    current_noisy = current_clean.lower() != current.lower().strip()
+    candidate_noisy = candidate_clean.lower() != candidate.lower().strip()
+    if current_noisy != candidate_noisy:
+        return candidate if candidate_noisy is False else current
+
+    current_key = re.sub(r"[^a-z0-9]+", "", current_clean.lower())
+    candidate_key = re.sub(r"[^a-z0-9]+", "", candidate_clean.lower())
+    if current_key and current_key == candidate_key:
+        current_tokens = len(re.findall(r"[A-Za-z0-9]+", current_clean))
+        candidate_tokens = len(re.findall(r"[A-Za-z0-9]+", candidate_clean))
+        if candidate_tokens != current_tokens:
+            return candidate_clean if candidate_tokens > current_tokens else current_clean
+
+    if len(candidate_clean) < len(current_clean):
+        return candidate_clean or candidate
+    return current_clean or current
+
+
+def _prefer_certification_date(current: str, candidate: str) -> str:
+    current = str(current or "").strip()
+    candidate = str(candidate or "").strip()
+    if not current:
+        return candidate
+    if not candidate:
+        return current
+    return candidate if len(candidate) > len(current) else current

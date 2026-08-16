@@ -22,6 +22,31 @@ class AssessmentRecord(Base):
     job_description_text = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+
+class AuthSession(Base):
+    __tablename__ = "auth_session"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String, nullable=False, index=True)
+    device_id = Column(String, nullable=False, default="unknown")
+    user_agent = Column(String, nullable=True)
+    refresh_token_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    revoke_reason = Column(String, nullable=True)
+
+
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_record"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    idempotency_key = Column(String, nullable=False, unique=True, index=True)
+    request_hash = Column(String, nullable=False)
+    response_json = Column(Text, nullable=False)
+    status_code = Column(Integer, nullable=False, default=200)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime, nullable=False)
+
+
 def create_tables():
     Base.metadata.create_all(bind=engine)
 

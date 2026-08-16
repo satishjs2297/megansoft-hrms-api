@@ -64,5 +64,7 @@ def extract_text(file_bytes: bytes, filename: str) -> Tuple[str, str]:
         return extract_text_from_pdf(file_bytes, filename), "pdf"
     elif lower.endswith((".docx", ".doc")):
         return extract_text_from_docx(file_bytes), "docx"
+    elif lower.endswith(".txt"):
+        return file_bytes.decode("utf-8", errors="ignore"), "txt"
     else:
         raise ValueError(f"Unsupported file type: {filename}")

@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from fastapi.responses import Response
-from app.auth.router import get_current_user
+from app.auth.router import CurrentUser, require_permissions
 from app.resume.schemas import StructuredResume
 from app.resume.extractor import extract_text
 from app.resume.llm_processor import LLMProcessor
@@ -23,10 +23,15 @@ class SkillExtractionRequest(BaseModel):
     jd_text: str
 
 
+class StructureResumeRequest(BaseModel):
+    extracted_text: str
+    job_description_text: Optional[str] = ""
+
+
 @router.post("/extract", response_model=ExtractResponse)
 async def extract_resume_text(
     file: UploadFile = File(...),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     content = await file.read()
     try:
@@ -38,15 +43,16 @@ async def extract_resume_text(
 
 @router.post("/structure", response_model=StructuredResume)
 async def structure_resume(
-    payload: dict,
-    current_user: str = Depends(get_current_user)
+    payload: StructureResumeRequest,
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
-    extracted_text = payload.get("extracted_text", "")
+    extracted_text = payload.extracted_text
     if not extracted_text:
         raise HTTPException(status_code=400, detail="extracted_text is required")
+    job_description_text = payload.job_description_text or ""
     processor = LLMProcessor()
     try:
-        resume = processor.process_resume(extracted_text)
+        resume = processor.process_resume(extracted_text, job_description_text=job_description_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM processing failed: {str(e)}")
     return resume
@@ -55,10 +61,10 @@ async def structure_resume(
 @router.post("/generate")
 async def generate_resume(
     resume_data: StructuredResume,
-    template_id: str = "ford-india-resume-template-v2.docx",
-    current_user: str = Depends(get_current_user)
+    template_id: str = "ford-india-resume-template.docx",
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
-    template_path = os.path.join(settings.templates_dir, template_id)
+    template_path = os.path.join(settings.resolved_templates_dir, template_id)
     if not os.path.exists(template_path):
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
     try:
@@ -77,26 +83,26 @@ async def generate_resume(
 @router.post("/upload-template")
 async def upload_template(
     file: UploadFile = File(...),
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
     if not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="Only .docx templates allowed")
     content = await file.read()
-    save_path = os.path.join(settings.templates_dir, file.filename)
+    save_path = os.path.join(settings.resolved_templates_dir, file.filename)
     with open(save_path, "wb") as f:
         f.write(content)
     return {"message": "Template uploaded", "template_id": file.filename}
 
 
 @router.get("/templates")
-def get_templates(current_user: str = Depends(get_current_user)):
+def get_templates(current_user: CurrentUser = Depends(require_permissions("app:full_access"))):
     return list_templates()
 
 
 @router.post("/extract-jd-skills")
 async def extract_jd_skills(
     payload: SkillExtractionRequest,
-    current_user: str = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_permissions("resume:extract_jd_skills"))
 ):
     processor = LLMProcessor()
     try:
