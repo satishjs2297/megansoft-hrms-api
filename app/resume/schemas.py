@@ -36,6 +36,8 @@ class Education(BaseModel):
     institution: str
     degree: str
     field_of_study: str
+    start_date: str = "TBD"
+    end_date: str = "TBD"
     graduation_date: str
     gpa: Optional[str] = None
     achievements: List[str] = Field(default_factory=list)
@@ -69,6 +71,7 @@ class StructuredResume(BaseModel):
     career_summary: List[str] = Field(default_factory=list)
     relevant_skills: List[str] = Field(default_factory=list)
     experience: List[Experience] = Field(default_factory=list)
+    career_gaps: List[str] = Field(default_factory=list)
     education: List[Education] = Field(default_factory=list)
     skills: List[Skill] = Field(default_factory=list)
     projects: List[Project] = Field(default_factory=list)

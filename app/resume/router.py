@@ -64,6 +64,12 @@ async def generate_resume(
     template_id: str = "ford-india-resume-template.docx",
     current_user: CurrentUser = Depends(require_permissions("app:full_access"))
 ):
+    # The enhanced India template is generated from the original while retaining
+    # the original file as a rollback/reference copy.
+    if template_id == "ford-india-resume-template.docx":
+        enhanced = os.path.join(settings.resolved_templates_dir, "ford-india-resume-template-enhanced.docx")
+        if os.path.exists(enhanced):
+            template_id = "ford-india-resume-template-enhanced.docx"
     template_path = os.path.join(settings.resolved_templates_dir, template_id)
     if not os.path.exists(template_path):
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")

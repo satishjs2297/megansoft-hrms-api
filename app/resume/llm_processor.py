@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from typing import Optional
 from app.resume.schemas import StructuredResume
 from app.config import get_settings
@@ -210,6 +211,8 @@ Return this exact JSON structure:
       "institution": "university",
       "degree": "degree name",
       "field_of_study": "field",
+      "start_date": "MM/YYYY or YYYY or TBD",
+      "end_date": "MM/YYYY or YYYY or TBD",
       "graduation_date": "YYYY",
       "gpa": "GPA or empty string"
     }}
@@ -235,6 +238,7 @@ OUTPUT RULES:
 - Return ONLY valid JSON, no markdown, no explanation.
 - Use empty string "" for missing text fields, empty arrays [] for missing lists.
 - Never return null for string fields — use "".
+- For missing education start/end/graduation dates, return "TBD" so the recruiter can complete them.
 - relevant_skills must always contain exactly 3 distinct skills taken from the candidate's actual resume skills/technologies.
 - When a job description is provided, relevant_skills must be the 3 resume-backed skills that best match the job description priorities.
 - certifications must include every certification mentioned in the resume, even when only partial details are available.
@@ -319,17 +323,24 @@ Resume Text:
             exp["company"] = exp.get("company") or ""
             exp["position"] = exp.get("position") or ""
             exp["client_name"] = exp.get("client_name") or exp.get("company") or ""
-            exp["start_date"] = exp.get("start_date") or "2020"
-            exp["end_date"] = exp.get("end_date") or "2024"
+            exp["start_date"] = exp.get("start_date") or "TBD"
+            exp["end_date"] = exp.get("end_date") or ("Present" if exp.get("is_current") else "TBD")
             exp["description"] = exp.get("description") or []
             exp["technologies"] = exp.get("technologies") or []
+        calculated_total_experience = self._calculate_total_experience_years(data["experience"])
+        if calculated_total_experience is not None:
+            contact["total_experience_years"] = calculated_total_experience
         if not data.get("education"):
             data["education"] = []
         for edu in data["education"]:
             edu["institution"] = edu.get("institution") or ""
             edu["degree"] = edu.get("degree") or ""
             edu["field_of_study"] = edu.get("field_of_study") or ""
-            edu["graduation_date"] = edu.get("graduation_date") or "2024"
+            edu["graduation_date"] = edu.get("graduation_date") or "TBD"
+            duration = str(edu.get("duration") or edu.get("study_duration") or "")
+            duration_parts = re.split(r"\s*(?:-|–|—|to)\s*", duration, maxsplit=1, flags=re.IGNORECASE)
+            edu["start_date"] = edu.get("start_date") or (duration_parts[0].strip() if len(duration_parts) == 2 else "TBD")
+            edu["end_date"] = edu.get("end_date") or (duration_parts[1].strip() if len(duration_parts) == 2 else edu["graduation_date"])
             edu["gpa"] = edu.get("gpa") or ""
         if not data.get("skills"):
             data["skills"] = []
@@ -493,6 +504,62 @@ Resume Text:
                 if len(top) == 3:
                     break
         return top[:3]
+
+    @staticmethod
+    def _parse_experience_month(value: object, is_end: bool = False) -> tuple[int, int] | None:
+        text = str(value or "").strip().lower()
+        if not text or text in {"tbd", "tbe"}:
+            return None
+        if text in {"present", "current", "now"}:
+            now = datetime.now()
+            return now.year, now.month
+
+        month_names = {
+            name.lower(): index
+            for index, name in enumerate(("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"), 1)
+        }
+        named = re.search(r"([a-z]+)\s+(\d{4})", text)
+        if named and named.group(1) in month_names:
+            return int(named.group(2)), month_names[named.group(1)]
+
+        year_month = re.search(r"\b(\d{4})[/-](\d{1,2})\b", text)
+        if year_month and 1 <= int(year_month.group(2)) <= 12:
+            return int(year_month.group(1)), int(year_month.group(2))
+
+        month_year = re.search(r"\b(\d{1,2})[/-](\d{4})\b", text)
+        if month_year and 1 <= int(month_year.group(1)) <= 12:
+            return int(month_year.group(2)), int(month_year.group(1))
+
+        year = re.search(r"\b(\d{4})\b", text)
+        if year:
+            return int(year.group(1)), 12 if is_end else 1
+        return None
+
+    @classmethod
+    def _calculate_total_experience_years(cls, experiences: list[dict]) -> str | None:
+        intervals: list[tuple[int, int]] = []
+        for exp in experiences or []:
+            start = cls._parse_experience_month(exp.get("start_date"))
+            end = cls._parse_experience_month(exp.get("end_date"), is_end=True)
+            if not start or not end:
+                continue
+            start_month = start[0] * 12 + start[1]
+            end_month = end[0] * 12 + end[1]
+            if end_month < start_month:
+                continue
+            intervals.append((start_month, end_month))
+        if not intervals:
+            return None
+
+        intervals.sort()
+        merged: list[list[int]] = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        total_months = sum(end - start + 1 for start, end in merged)
+        return f"{total_months / 12:.2f}".rstrip("0").rstrip(".")
 
     def _collect_skill_candidates(self, data: dict) -> dict[str, dict]:
         candidates: dict[str, dict] = {}

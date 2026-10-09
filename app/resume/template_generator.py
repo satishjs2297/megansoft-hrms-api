@@ -2,6 +2,8 @@ import os
 import tempfile
 import logging
 import base64
+import calendar
+import re
 from datetime import datetime
 from io import BytesIO
 from typing import Optional
@@ -42,7 +44,9 @@ def _prepare_context(resume_data: StructuredResume, doc: DocxTemplate, photo_tmp
     certifications = _dedupe_certifications(resume_data.certifications)
     first_name = contact.first_name or ""
     last_name = contact.last_name or ""
-    if not first_name and not last_name and contact.name:
+    # The recruiter may correct the full name in the review form. Always derive
+    # the template's first/last name fields from that corrected value.
+    if contact.name and not (first_name or last_name):
         parts = contact.name.split()
         first_name = parts[0] if parts else ""
         last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
@@ -85,17 +89,20 @@ def _prepare_context(resume_data: StructuredResume, doc: DocxTemplate, photo_tmp
                 "client_name": exp.client_name or exp.company,
                 "start_date": _format_ddmmyyyy(exp.start_date),
                 "end_date": _format_ddmmyyyy(exp.end_date) or "Present",
-                "description": exp.description,
-                "responsibilites": exp.description,
+                "description": [_clean_responsibility(item) for item in exp.description if str(item).strip()],
+                "responsibilites": [_clean_responsibility(item) for item in exp.description if str(item).strip()],
                 "technologies": exp.technologies or [],
             }
             for exp in resume_data.experience
         ],
+        "career_gaps": _find_career_gaps(resume_data.experience),
         "education": [
             {
                 "institution": edu.institution,
                 "degree": edu.degree,
                 "field_of_study": edu.field_of_study,
+                "start_date": _display_or_tbd(edu.start_date),
+                "end_date": _display_or_tbd(edu.end_date),
                 "graduation_date": _format_ddmmyyyy(edu.graduation_date),
                 "gpa": edu.gpa or "",
             }
@@ -268,6 +275,54 @@ def _format_ddmmyyyy(value) -> str:
     return str(value)
 
 
+def _display_or_tbd(value) -> str:
+    text = str(value or "").strip()
+    return text or "TBD"
+
+
+def _clean_responsibility(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace("\u00a0", " ")).strip()
+
+
+def _parse_month(value) -> Optional[tuple[int, int]]:
+    text = str(value or "").strip().lower()
+    if not text or text in {"present", "current", "tbd", "tbe"}:
+        return None
+    match = re.search(r"(\d{1,2})[/-](\d{4})", text)
+    if match:
+        return int(match.group(2)), int(match.group(1))
+    match = re.search(r"\b(\d{4})\b", text)
+    if match:
+        return int(match.group(1)), 1
+    return None
+
+
+def _find_career_gaps(experiences) -> list[str]:
+    dated = []
+    for exp in experiences or []:
+        start = _parse_month(exp.start_date)
+        end = None if exp.is_current else _parse_month(exp.end_date)
+        if start:
+            dated.append((start[0] * 12 + start[1], end[0] * 12 + end[1] if end else None))
+    dated.sort()
+    gaps = []
+    for (_, previous_end), (next_start, _) in zip(dated, dated[1:]):
+        if previous_end is None:
+            continue
+        missing_months = next_start - previous_end - 1
+        if missing_months >= 1:
+            first = previous_end + 1
+            last = next_start - 1
+            first_year, first_month = divmod(first - 1, 12)
+            last_year, last_month = divmod(last - 1, 12)
+            gaps.append(
+                f"{calendar.month_abbr[first_month]} {first_year} - "
+                f"{calendar.month_abbr[last_month]} {last_year} ({missing_months} month"
+                f"{'s' if missing_months != 1 else ''})"
+            )
+    return gaps
+
+
 def _format_ddmmyyyy_slash(value) -> str:
     formatted = _format_ddmmyyyy(value)
     return formatted.replace("-", "/") if formatted else ""
@@ -278,8 +333,11 @@ def list_templates() -> list[dict]:
     if not os.path.exists(templates_dir):
         return []
     result = []
+    enhanced_template = "ford-india-resume-template-enhanced.docx"
     for fname in os.listdir(templates_dir):
         if fname.lower().endswith(".docx"):
+            if fname == "ford-india-resume-template.docx" and os.path.exists(os.path.join(templates_dir, enhanced_template)):
+                continue
             result.append({"id": fname, "name": fname.replace("-", " ").replace("_", " ").replace(".docx", "").title(), "filename": fname})
     result.sort(key=lambda item: item["name"])
     return result
